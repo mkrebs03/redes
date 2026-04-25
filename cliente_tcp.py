@@ -1,51 +1,73 @@
 import argparse
 import socket
+import threading
 
 BUFFER_SIZE = 1024
 EXIT_WORD = "salir"
 
 
+def receive_messages(client_socket: socket.socket, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            data = client_socket.recv(BUFFER_SIZE)
+        except OSError:
+            break
+
+        if not data:
+            print("\nEl servidor cerro la conexion.")
+            stop_event.set()
+            break
+
+        print(f"\n{data.decode('utf-8').strip()}\nCliente> ", end="", flush=True)
+
+
 def run_client(host: str, port: int, timeout: float) -> None:
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+    stop_event = threading.Event()
 
     try:
         client_socket.settimeout(timeout)
         client_socket.connect((host, port))
+        client_socket.settimeout(None)
 
         print(f"Conectado al servidor en {client_socket.getpeername()}")
         print(f"Socket local del cliente: {client_socket.getsockname()}")
         print("Ingrese un mensaje y presione Enter. Use 'salir' para terminar.")
 
-        while True:
+        receiver = threading.Thread(
+            target=receive_messages,
+            args=(client_socket, stop_event),
+            daemon=True,
+        )
+        receiver.start()
+
+        while not stop_event.is_set():
             try:
                 message = input("Cliente> ").strip()
             except EOFError:
+                message = EXIT_WORD
+            except KeyboardInterrupt:
+                print()
                 message = EXIT_WORD
 
             if not message:
                 print("Debe ingresar un mensaje no vacio.")
                 continue
 
-            client_socket.sendall(message.encode("utf-8"))
-
             try:
-                response = client_socket.recv(BUFFER_SIZE)
-            except socket.timeout:
-                print("Tiempo de espera agotado al recibir la respuesta del servidor.")
+                client_socket.sendall(f"{message}\n".encode("utf-8"))
+            except OSError as error:
+                print(f"Error al enviar el mensaje: {error}")
                 break
-
-            if not response:
-                print("El servidor cerro la conexion.")
-                break
-
-            print(f"Servidor> {response.decode('utf-8').strip()}")
 
             if message.lower() == EXIT_WORD:
+                stop_event.set()
                 break
 
     except OSError as error:
         print(f"Error del cliente: {error}")
     finally:
+        stop_event.set()
         client_socket.close()
         print("Cliente finalizado.")
 
